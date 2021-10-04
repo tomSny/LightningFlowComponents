@@ -2,8 +2,8 @@
  * @description       : SendBetterEmailUtil - helper utilities for SendBetterEmail
  * @author            : Refactored from Alex Edelstein
  * @group             : 
- * @last modified on  : 2021-07-28
- * @last modified by  : Jack D. Pond
+ * @last modified on  : 2021-10-03
+ * @last modified by  : Tom Snyder <tom@3ddd.com>
  * Modifications Log 
  * Ver		Date		Author				Modification
  * 2.00.02	10-06-2020	Mohith Shrivastava  Refactored from SendBetterEmail
@@ -143,6 +143,10 @@ public inherited sharing class SendBetterEmailUtil {
 		return mapContentDocumentIdByContentVersion;
 	}
 
+
+
+
+
 	// Creates Map with template Name and list of all Email Templates with different languages
 	public static Map<String, List<EmailTemplate>> getMapTemplateNameByEmailTemplates(
 		Set<String> templateNames,
@@ -184,32 +188,24 @@ public inherited sharing class SendBetterEmailUtil {
 			if (templateLanguage == null) {
 				templateLanguage = localKey;
 			}
-			for (
-				EmailTemplate thisTemplate : mapTemplateNameByEmailTemplates.get(
-					templateName
-				)
-			) {
+			for (EmailTemplate thisTemplate : mapTemplateNameByEmailTemplates.get(templateName)) {
 				if ( thisTemplate.Description != null &&
-					thisTemplate.Description.contains(
-						SendBetterEmailConstant.LANGUAGE_EQUAL
-					)
+					thisTemplate.Description.contains(SendBetterEmailConstant.LANGUAGE_EQUAL)
 				) {
 					if (
 						thisTemplate.Description.substringAfter(
 								SendBetterEmailConstant.LANGUAGE_EQUAL
 							)
-							.substringBefore(
-								SendBetterEmailConstant.DOUBLE_QUOTE
-							) == templateLanguage
+							.substringBefore(SendBetterEmailConstant.DOUBLE_QUOTE) == templateLanguage
 					) {
 						retTemplateID = thisTemplate.Id;
 						break;
 					}
-				} else {
-					blankTemplate = (blankTemplate == null)
-						? thisTemplate.Id
-						: blankTemplate;
-				}
+					} else {
+						blankTemplate = (blankTemplate == null)
+							? thisTemplate.Id
+							: blankTemplate;
+					}
 			}
 		}
 		return (retTemplateID == null) ? blankTemplate : retTemplateID;

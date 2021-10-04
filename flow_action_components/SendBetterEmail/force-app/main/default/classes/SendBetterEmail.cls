@@ -3,8 +3,8 @@
  * @Description			: Uses Spring/Summer '20 EmailTemplate Object + ContentVersion with multi-lingual
  * @OriginalAuthor		: Alex Edelstein, etal
  * @Group				: unofficialSF
- * @Last Modified By	: Jack D. Pond
- * @Last Modified On	: 2021-08-19
+ * @Last Modified By	: Tom Snyder <tom@3ddd.com>
+ * @Last Modified On	: 2021-10-03
  * @License				: LICENSE found in https://github.com/alexed1/LightningFlowComponents
  * @Modification Log	:
  *
@@ -32,524 +32,354 @@
  **/
 
 public without sharing class SendBetterEmail {
+
+
+    //stop unit test failures in sandboxes when email is disabled
+    @TestVisible
+    static boolean haltSendEmail = ( Test.isRunningTest() && !SendBetterEmail.isEmailDeliverabilityEnabled  );
+
+    public static boolean isEmailDeliverabilityEnabled {
+        get {
+            try {
+                Messaging.reserveSingleEmailCapacity(1);
+                Messaging.reserveMassEmailCapacity(1);
+                return true;
+            } catch (System.NoAccessException e) {
+                return false;
+            } catch (Exception ex) {
+                //JACK: Want me to throw this error? You have hit EmailCapacity: System.HandledException: The daily limit for the org would be exceeded by this request.
+                /*throw new InvocableActionException(
+                   ...
+                );*/
+                return true;
+            }
+        }
+    }
+
+
+/*
+
+massive refactor, here are the main differences:
+
+    - state info is stored on SendBetterEmailRequest (i.e. response, results, emailtemplate, contentVersions, etc..)
+    - SendBetterEmailRequest also acts as a builder for MassEmail, SingleEmail, And Task(s);
+    - New set of core classes to keep logic modular / SoC.
+==========================================================================================
+ "Notation" = | ::class:: | method() | { block } | --DataFlow[]--> | ""label" |
+============================================================================================
+    "FLOW_INTERVIEW" --SendBetterEmailRequest[]--> ::SendBetterEmailDispatcher:: {
+        Validate() {
+            Normalize()-->::EmailTemplateSelector::--setTemplate()--
+            -->::AttachmentSelector::--setAttachments()-->validate()
+        }
+        Dispatch() {
+            "MassEmails" --SendBetterEmailRequest[]-->::SendBetterEmailTransmitter::--Send();
+            "SingleEmail" --SendBetterEmailRequest[]-->::SendBetterEmailTransmitter::--Send();
+
+            "AddTasks" = SendBetterEmailTransmitter[]-->::PostEmailHandler::--Save();  //TODO
+        }
+============================================================================================*/
+    public class SendBetterEmailDispatcher {
+        List<SendBetterEmailRequest> emails;
+        //MAP<string,MAP<string,EmailTemplate>> mapTemplatebyNameAndLang;
+        double percentValid = 0;
+
+
+        public SendBetterEmailDispatcher(List<SendBetterEmailRequest> sbes) {
+            this.emails = sbes;
+        }
+
+        //using Id or Name or Name/lang
+        private boolean validate() {
+            boolean rtn=true;
+            integer errCount = 0;
+            EmailTemplateSelector etS = new EmailTemplateSelector(emails);
+            AttachmentSelector attS = new AttachmentSelector(emails);
+            
+            for (SendBetterEmailRequest sbe :  emails) {
+                NormalizeSbe(sbe);
+                etS.setTemplate(sbe);
+                attS.setAttachments(sbe);
+                if (!validateSbe(sbe)) {
+                    rtn=false;
+                    errCount++;
+                }
+            }
+            percentValid = (emails.size()> 0) ? (errCount/emails.size()) : 0;
+            return rtn;
+        }
+
+        public void dispatch() {
+            SendBetterEmailTransmitter massTransmit = getMassEmailContext().send();
+            SendBetterEmailTransmitter singleTransmit = getSingleEmailContext().send();
+        }
+
+        //Valid MASS SBEmails 
+        public SendBetterEmailTransmitter getMassEmailContext() {
+            LIST<SendBetterEmailRequest> betterEmails = new LIST<SendBetterEmailRequest>();
+            LIST<Messaging.MassEmailMessage> massEmails = new LIST<Messaging.MassEmailMessage>();
+            for (SendBetterEmailRequest sber : emails) {
+                if (sber.response.errors==null && sber.emailMessageType == SendBetterEmailConstant.MASSEMAIL) {
+                    Messaging.MassEmailMessage e = sber.toMassEmailMessage();
+                    if (e!=null) {
+                        massEmails.add(e);
+                        betterEmails.add(sber);
+                    }
+                }
+            }
+            return new SendBetterEmailTransmitter(betterEmails, massEmails, true);
+        }
+
+        //Valid SINGLE SBEmails 
+        public SendBetterEmailTransmitter getSingleEmailContext() {
+            LIST<SendBetterEmailRequest> betterEmails = new LIST<SendBetterEmailRequest>();
+            LIST<Messaging.SingleEmailMessage> singleEmails = new LIST<Messaging.SingleEmailMessage>();
+            for (SendBetterEmailRequest sber : emails) {
+                if (sber.response.errors==null && sber?.emailMessageType != SendBetterEmailConstant.MASSEMAIL) {
+                    Messaging.SingleEmailMessage singleEmail = sber.toSingleEmailMessage();
+                    if (singleEmail!=null) {
+                        singleEmails.add(singleEmail);
+                        betterEmails.add(sber);
+                    }
+                }
+            }
+            return new SendBetterEmailTransmitter(betterEmails, singleEmails, false);
+        }
+
+    }
+
+    public class SendBetterEmailTransmitter {
+        public LIST<SendBetterEmailRequest> betterEmails;
+        public boolean isMassEmail;
+        public LIST<Messaging.Email> emailMessages;
+        public LIST<Messaging.SendEMailResult> sendResults;
+        public SendBetterEmailTransmitter(LIST<SendBetterEmailRequest> sbes, LIST<Messaging.Email> emails, boolean isMassEmail) {
+            this.betterEmails = sbes;
+            this.emailMessages = emails;
+            this.isMassEmail = isMassEmail;
+        }
+
+        public SendBetterEmailTransmitter send() {
+            try {
+                if (emailMessages!=null && !emailMessages.IsEmpty()) {
+                    this.sendResults = safeSendEmail(emailMessages, false);
+                    copySendEmailResultsToSbes(this.sendResults,betterEmails);
+                }
+            } catch (Exception ex) {
+                copySendEmailExceptionToSbes(ex,betterEmails);
+            }
+            return this;
+        }
+
+        private Messaging.SendEmailResult[] safeSendEmail(LIST<Messaging.Email> emails, boolean allOrNothing ) {
+            return (SendBetterEmail.haltSendEmail) ? null : Messaging.sendEmail(emails, allOrNothing);
+        }
+  
+        private void copySendEmailResultsToSbes(Messaging.SendEmailResult[] res, SendBetterEmailRequest[] sbes) {
+            for (Integer i=0; i<sbes.size(); i++) {
+                //res==null - did not actually fire Messaging.sendEmail() as it was intercepted for UT success
+                sbes[i].response.isSuccess = (res!=null) ? res[i].isSuccess() : true;
+                sbes[i].response.errors = (res!=null) ? SendBetterEmailUtil.getErrorString(res[i].getErrors()) : null; 
+                sbes[i].response.templateUsed = sbes[i].EmailTemplate?.Id;
+            }       
+        }
+        private void copySendEmailExceptionToSbes(Exception ex, SendBetterEmailRequest[] sbes) {
+            for (Integer i=0; i<sbes.size(); i++) {
+                sbes[i].response.isSuccess = false;
+                sbes[i].response.errors = ex.getmessage();
+            }       
+        }  
+    }
+
+
+    public class EmailTemplateSelector {
+        MAP<string,EmailTemplate> mapTemplates;
+        MAP<string,MAP<string,EmailTemplate>> mapTemplatesbyNameAndLang;
+        String orgLocale = SendBetterEmailConstant.getOrganizationLocale(); //local language key for the organization
+        //JACK:  ask if needed : private static MAP<string,MAP<string,EmailTemplate>> mapTemplatebyDevNameAndLang;
+        public EmailTemplateSelector(LIST<SendBetterEmailRequest> sbes) {
+            SET<string> ids = new SET<string>();
+            SET<string> names = new SET<string>();
+            for(SendBetterEmailRequest sbe : sbes) {
+                if (String.isNotBlank(sbe.TemplateId)) ids.add(sbe.TemplateId?.trim());
+                if (String.isNotBlank(sbe.TemplateName)) names.add(sbe.TemplateName?.trim());
+            }
+            mapTemplatesbyNameAndLang = SendBetterEmail.getMapTemplatebyNameAndLang(names);
+            mapTemplates = SendBetterEmail.getEmailTemplates(ids);
+        }
+
+        public void setTemplate(SendBetterEmailRequest sbe) {
+            sbe.EmailTemplate = getTemplate(sbe);
+        }
+
+        public EmailTemplate getTemplate(SendBetterEmailRequest sbe) {
+            if (sbe.templateID!=null) {
+                return getTemplateById(sbe.templateID);
+            }
+            if (sbe.templateName!=null) {
+                return getTemplateByName(sbe.TemplateName,sbe.TemplateLanguage);
+            }
+            return null;
+        }
+
+        private EmailTemplate getTemplateById(string id){
+            return mapTemplates.get(id);
+        } 
+        private EmailTemplate getTemplateByName(string Name, string lang) {
+            MAP<string,EmailTemplate> mapLangTemplates = mapTemplatesbyNameAndLang.get(name.toLowercase());
+            if (mapLangTemplates!=null) {
+                if (mapLangTemplates.size()==1) return mapLangTemplates.values()[0];
+                else if (mapLangTemplates.size()>1) {
+                    if (lang!=null && mapLangTemplates.containsKey(lang.tolowercase()) ) {
+                        return mapLangTemplates.get(lang.tolowercase());
+                    }
+                    else if ( mapLangTemplates.containskey(orgLocale.tolowercase()) ) {
+                    return mapLangTemplates.get(orgLocale.tolowercase());
+                    }
+                    else {
+                        EmailTemplate undef = mapLangTemplates.get('undefined');
+                        return (undef!=null) ? undef : mapLangTemplates.values()[0];
+                    }
+                }
+            }
+            return null;
+        } 
+    }
+
+
+    //JACK: confirm cdl is the only attachment option? and all cdl objects must have a cdl.contentDocumentId (queried) no existing logic for cdl.Id?
+
+    public class AttachmentSelector {
+        //MAP<string, ContentVersion> mapCdlIdToContentVersion = new MAP<string, ContentVersion>();
+        MAP<string, ContentVersion> mapDocIdToContentVersion = new MAP<string, ContentVersion>();
+        public AttachmentSelector(LIST<SendBetterEmailRequest> sbes) {
+            SET<Id> docIds = new SET<Id>();
+            //SET<ContentDocumentLink> cdlIds;
+            SET<string> names;
+            for(SendBetterEmailRequest sbe : sbes) {
+                if (sbe.contentDocumentAttachments!=null) {
+                    for (ContentDocumentLink cdl : sbe.contentDocumentAttachments){
+                        if (cdl.ContentDocumentId!=null) {
+                            docIds.add(cdl.ContentDocumentId);
+                        }
+                    }
+                    for (ContentVersion cv : [ SELECT Id, PathOnClient, Title, VersionData, VersionNumber, FileType, ContentDocumentId, FileExtension
+                                                FROM ContentVersion
+                                                WHERE ContentDocumentId IN :docIds ]) {
+                        mapDocIdToContentVersion.put(cv.ContentDocumentId, cv);
+                    }
+                }
+            }
+        }
+
+        public void setAttachments(SendBetterEmailRequest sbe) {
+            sbe.ContentVersions = getAttachments(sbe);
+        }
+        
+        public SET<ContentVersion> getAttachments(SendBetterEmailRequest sbe) {
+            if (sbe.contentDocumentAttachments!=null) {
+                return getSetofContentVersionsByCdlsWithDocId(sbe.contentDocumentAttachments);
+            }
+            return null;
+        }
+
+
+        // todays use-case using mail.setEntityAttachments(with ContentVersion) - Array of IDs of Document, ContentVersion, or Attachment items to attach to the email.
+        // JACK:  this maybe simplified if we can just base on ContentDocument (I assume it sends latest version DO YOU WANT to support previous versions?)
+        //        add to errors if missing document(s)?
+        public SET<ContentVersion> getSetofContentVersionsByCdlsWithDocId(LIST<ContentDocumentLink> cdls) {
+            SET<ContentVersion> rtn = new SET<ContentVersion>();
+            for (ContentDocumentLink cdl : cdls) {
+                if (mapDocIdToContentVersion.containsKey(cdl.ContentDocumentId)) {
+                    rtn.add(mapDocIdToContentVersion.get(cdl.ContentDocumentId));
+                }
+            }
+            return rtn;
+        }
+    }
+
+
+    public static void normalizeSbe(SendBetterEmailRequest sbe) {
+
+        sbe.subject = (String.IsEmpty(sbe.subject?.trim())) ? null : sbe.subject;
+        sbe.emailMessageType = sbe.emailMessageType == null ? 'singleEmail' : sbe.emailMessageType;
+        sbe.setSaveAsTask = sbe.setSaveAsTask != null ? sbe.setSaveAsTask : 
+            (sbe.recordId == null ? false : (sbe.setSaveAsActivity == null ? false : sbe.setSaveAsActivity));
+        sbe.setSaveAsActivity = sbe.setSaveAsActivity == null ? false : sbe.setSaveAsActivity;
+        sbe.setTreatTargetObjectAsRecipient = sbe.setTreatTargetObjectAsRecipient==null ? SendBetterEmailConstant.DEFAULT_TREAT_TARGET_OBJECT_AS_RECIPIENT : sbe.setTreatTargetObjectAsRecipient;
+        sbe.UseSalesforceSignature = sbe.UseSalesforceSignature==null ? false : sbe.UseSalesforceSignature;
+        sbe.bcc = sbe.bcc==null ? false : sbe.bcc;
+
+    }
+
+    
     @invocableMethod(
         label='Send Better Email'
         configurationEditor='c:sendBetterEmailCPE'
         category='Email'
     )
-    public static List<SendBetterEmailResponse> SendEmail(
-        List<SendBetterEmailRequest> requests
-    ) {
-        List<SendBetterEmailResponse> responseList = new List<SendBetterEmailResponse>();
+    public static List<SendBetterEmailResponse> SendEmail( List<SendBetterEmailRequest> requests ) {
+       
 
-        List<Messaging.SingleEmailMessage> singleEmailList = new List<Messaging.SingleEmailMessage>();
-        List<SendBetterEmailRequest> singleEmailRequestToSend = new List<SendBetterEmailRequest>();
 
-        List<Messaging.MassEmailMessage> massEmailList = new List<Messaging.MassEmailMessage>();
-        List<SendBetterEmailRequest> massEmailRequestListToSend = new List<SendBetterEmailRequest>();
+        SendBetterEmailDispatcher dispatcher = new SendBetterEmailDispatcher(requests);
+        dispatcher.validate();
+        dispatcher.dispatch();
+        
 
-        List<Messaging.SendEmailResult> singleSendEmailResults = new List<Messaging.SendEmailResult>();
-        List<Messaging.SendEmailResult> massSendEmailResults = new List<Messaging.SendEmailResult>();
+        //TODO:  move to send()
+        /*
+        //JACK add these checks?
+        reserveMassEmailCapacity(amountReserved)
+        Reserves email capacity to send mass email to the specified number of email addresses, after the current transaction commits.
+        reserveSingleEmailCapacity(amountReserved)
+        Reserves email capacity to send single email to the specified number of email addresses, after the current transaction commits.
 
-        // Set for template Names and content document Ids
-        Set<String> templateNames = new Set<String>();
-        Set<Id> contentDocumentIds = new Set<Id>();
-        // Target objectIds List
-        List<String> listTargetObjectIds = new List<String>();
-        // Map of recordId via Name
-        Map<String, String> mapRecordIdByName = new Map<String, String>();
+        respecting - Email Opt Out ?  do you have a settings/CMDT?
+        */
+        LIST<string> allTargetObjectIds = new LIST<string>();
+        for (SendBetterEmailRequest sber : requests) {
+            if (sber.emailMessageType == SendBetterEmailConstant.MASSEMAIL) {
+                if (sber.targetObjectIds!=null) {
+                    allTargetObjectIds.addAll(sber.targetObjectIds);
+                }
+            } else {
+                if (sber.templateTargetObjectId != null) {
+                    allTargetObjectIds.add(sber.templateTargetObjectId);
+                }
+            }
+        }
+        // Cache a Map of targetObjectIds(Contact, Lead, User or other Custom Objects)
+        Map<string,string> mapRecordIdByName = sendBetterEmailUtil.getMapRecordIdByName(allTargetObjectIds);
+           
+        
+/*
 
-        // Map for emailTemplate
-        Map<String, List<EmailTemplate>> mapTemplateNameByEmailTemplates = new Map<String, List<EmailTemplate>>();
-        Map<Id, EmailTemplate> mapIdByEmailTemplate = new Map<Id, EmailTemplate>();
-        Map<Id, List<ContentVersion>> mapContentDocumentIdByContentVersion = new Map<Id, List<ContentVersion>>();
-
-        // List for Task Wrapper Collection
+       /*
+ 
+   
         List<SendBetterEmailAddTasksToEmail.TaskWrapper> lstTaskWrapper = new List<SendBetterEmailAddTasksToEmail.TaskWrapper>();
         List<Task> lstTaskToInsert = new List<Task>();
 
-        // Collect all inputs for SOQL
-        for (SendBetterEmailRequest curRequest : requests) {
-            if (curRequest.templateName != null && curRequest.templateName.length() > 0) {
-                templateNames.add(curRequest.templateName);
-            }
-            // Collect ContentDocument Link
-            if (curRequest.contentDocumentAttachments != null) {
-                for (
-                    ContentDocumentLink contentLink : curRequest.contentDocumentAttachments
-                ) {
-                    contentDocumentIds.add(contentLink.ContentDocumentId);
-                }
-            }
-            // Cache all Target Object Ids in
-            if (
-                curRequest.emailMessageType == SendBetterEmailConstant.MASSEMAIL
-            ) {
-                if (curRequest.targetObjectIds != null && curRequest.targetObjectIds.size() > 0) {
-                    listTargetObjectIds.addAll(curRequest.targetObjectIds);
-                }
+        response.isSuccess = true;
+        if (request.setSaveAsTask == true) {
+            if (request.whatIds != null && request.whatIds.size() > 0) {
+                lstTaskWrapper.addAll(SendBetterEmailAddTasksToEmail.addTasks(request,null,mapIdByEmailTemplate,mapRecordIdByName));
             } else {
-                if (curRequest.templateTargetObjectId != null) {
-                    listTargetObjectIds.add(curRequest.templateTargetObjectId);
-                }
+                response.taskIds = new List<String>{
+                    'Error:  Mass Email requires whatIds if saveAsTask'
+                };
             }
         }
-
-        // Cache the local language key for the organization
-        String localeKey = SendBetterEmailConstant.getOrganization();
-
-        // Cache Query results for Templates
-        mapTemplateNameByEmailTemplates = sendBetterEmailUtil.getMapTemplateNameByEmailTemplates(
-            templateNames,
-            mapIdByEmailTemplate
-        );
-
-        // Cache Query results for ContentDocument Ids
-        mapContentDocumentIdByContentVersion = sendBetterEmailUtil.getMapContentDocumentIdByContentVersions(
-            contentDocumentIds
-        );
-
-        // Cache a Map of targetObjectIds(Contact, Lead, User or other Custom Objects)
-        mapRecordIdByName = sendBetterEmailUtil.getMapRecordIdByName(
-            listTargetObjectIds
-        );
-
-        Integer requestIndex = 0;
-
-        for (SendBetterEmailRequest curRequest : requests) {
-            //Assign Request Number to the Requests
-            curRequest.index = requestIndex;
-
-            String HTMLbody = curRequest.HTMLbody;
-            String orgWideEmailAddressId = curRequest.orgWideEmailAddressId;
-            String plainTextBody = curRequest.plainTextBody;
-            String recordId = curRequest.recordId;
-            String replyEmailAddress = curRequest.replyEmailAddress;
-            String senderDisplayName = curRequest.senderDisplayName;
-            String subject = curRequest.subject;
-            String templateID = curRequest.templateID;
-            String templateName = curRequest.templateName;
-            String templateLanguage = curRequest.templateLanguage;
-            String templateTargetObjectId = curRequest.templateTargetObjectId;
-            Boolean setTreatTargetObjectAsRecipient = curRequest.setTreatTargetObjectAsRecipient == null ? SendBetterEmailConstant.DEFAULT_TREAT_TARGET_OBJECT_AS_RECIPIENT : curRequest.setTreatTargetObjectAsRecipient;
-
-            String emailMessageType = curRequest.emailMessageType == null
-                ? 'singleEmail'
-                : curRequest.emailMessageType;
-
-            Boolean UseSalesforceSignature = curRequest.UseSalesforceSignature ==
-                null
-                ? false
-                : curRequest.UseSalesforceSignature;
-
-            Boolean bcc = curRequest.bcc == null ? false : curRequest.bcc; // default to false
-
-            if (subject != null && (subject.length() == 0)) {
-                subject = null;
-            }
-
-            SendBetterEmailResponse thisResponse = new SendBetterEmailResponse();
-            thisResponse.index = requestIndex;
-            curRequest.setSaveAsTask = curRequest.saveAsTask;
-            curRequest.setSaveAsActivity = curRequest.saveAsActivity;
-
-            //from https://developer.salesforce.com/docs/atlas.en-us.apexcode.meta/apexcode/apex_forcecom_email_outbound.htm
-
-            // First, reserve email capacity for the current Apex transaction to ensure
-            // that we won't exceed our daily email limits when sending email after
-            // the current transaction is committed.
-            //Messaging.reserveSingleEmailCapacity(2);
-            /*
-				// These methods available to all email message classes through the base Messaging.Email Base Class
-	
-				setBccSender(bcc)
-				setReplyTo(replyAddress)
-				setTemplateID(templateID)
-				setSaveAsActivity(saveAsActivity)
-				setSenderDisplayName(displayName)
-				setUseSignature(useSignature)
-	
-				and through association:
-	
-				SaveAsTask 
-	*/
-            //			Mass Email Segment
-            if (emailMessageType == SendBetterEmailConstant.MASSEMAIL) {
-                curRequest.setSaveAsActivity = curRequest.setSaveAsActivity ==
-                    null
-                    ? false
-                    : curRequest.setSaveAsActivity;
-                curRequest.setSaveAsTask = curRequest.setSaveAsTask != null
-                    ? curRequest.setSaveAsTask
-                    : (curRequest.whatIds == null
-                          ? false
-                          : (curRequest.setSaveAsActivity == null
-                                ? false
-                                : curRequest.setSaveAsActivity));
-
-                // if saveAsTask is null, it will default to whatever saveAsActivity is, but if recordId is null, will set it to false
-                //	setBccSender(bcc)
-                //	setDescription(description)
-                //	setReplyTo(replyAddress)
-                //	setSaveAsActivity(saveAsActivity)
-                //	setSenderDisplayName(displayName)
-                //	setTargetObjectIds(targetObjectIds)
-                //	setTemplateID(templateID)
-                //	setUseSignature(useSignature)
-                //	setWhatIds(whatIds)
-                Messaging.MassEmailMessage mmail = new Messaging.MassEmailMessage();
-                // Set to True if you want to BCC yourself on the email.
-                mmail.setBccSender(bcc);
-                //	setDescription(description)
-                if (
-                    curRequest.description == null ||
-                    curRequest.description.length() == 0
-                ) {
-                    thisResponse.errors = 'You must specify a description for mass email message collections.';
-                } else {
-                    mmail.description = curRequest.description;
-                }
-                //	setReplyTo(replyAddress)
-                if (thisResponse.errors == null) {
-                    mmail.setReplyTo(replyEmailAddress);
-                }
-                //	setSaveAsActivity(saveAsActivity)
-                mmail.setSaveAsActivity(curRequest.setSaveAsActivity);
-                //	setSenderDisplayName(displayName)
-                if (thisResponse.errors == null) {
-                    mmail.setSenderDisplayName(senderDisplayName);
-                }
-                //	setTargetObjectIds(targetObjectIds)
-                if (thisResponse.errors == null) {
-                    if (
-                        curRequest.targetObjectIds == null ||
-                        curRequest.targetObjectIds.size() == 0
-                    ) {
-                        thisResponse.errors = 'You must specify a collection of targetObjectIds - required parameter for mass emails.';
-                    } else {
-                        mmail.setTargetObjectIds(curRequest.targetObjectIds);
-                        if (
-                            curRequest.whatIds != null &&
-                            curRequest.whatIds.size() > 0
-                        ) {
-                            if (
-                                curRequest.whatIds.size() ==
-                                curRequest.targetObjectIds.size()
-                            ) {
-                                try {
-                                    mmail.setWhatIds(curRequest.whatIds);
-                                } catch (Exception e) {
-                                    thisResponse.errors = e.getMessage();
-                                }
-                            } else {
-                                thisResponse.errors = 'You must match targetObjectIds one-for-one with whatIds';
-                            }
-                        }
-                    }
-                }
-                //	setTemplateID(templateID)
-                if (thisResponse.errors == null) {
-                    if (
-                        thisResponse.errors == null &&
-                        (templateName != null && templateName.length() > 0 ) &&
-                        (templateID != null && templateID.length() > 0 )
-                    ) {
-                        thisResponse.errors = 'You\'re trying to pass in both the name of the template and a template ID. Gotta pick one or the other. Use templateName to select the first matching template qualified with \'Language="xxx_YY"\' in the Description.  The templateID represents a specific Salesforce Email Template (either Classic or Lightning).';
-                    }
-                    if (curRequest.templateID == null) {
-                        if (curRequest.templateName == null) {
-                            thisResponse.errors = 'You must specify a template name or Template ID - required parameter for mass emails.';
-                        } else {
-                            templateID = sendBetterEmailUtil.getTemplateIDFromName(
-                                templateName,
-                                templateLanguage,
-                                mapTemplateNameByEmailTemplates,
-                                localeKey
-                            );
-                            if (templateID != null && templateID.length() > 0 ) {
-                                mmail.setTemplateID(templateID);
-                            } else {
-                                thisResponse.errors = 'An Email template with the specified template name could not be found';
-                            }
-                        }
-                    } else {
-                        mmail.setTemplateID(curRequest.templateID);
-                    }
-                }
-                //	setUseSignature(useSignature)
-                if (thisResponse.errors == null) {
-                    mmail.setUseSignature(
-                        curRequest.UseSalesforceSignature == null
-                            ? false
-                            : curRequest.UseSalesforceSignature
-                    );
-                }
-
-                if (thisResponse.errors == null) {
-                    massEmailList.add(mmail);
-                    massEmailRequestListToSend.add(curRequest);
-                } else {
-                    thisResponse.isSuccess = false;
-                }
-
-                responseList.add(thisResponse);
-                //				Single Email Segment
-            } else {
-                // Processes and actions involved in the SingleEmailMessage transaction occur next,
-                // which conclude with sending a single email.
-
-                curRequest.setSaveAsTask = curRequest.setSaveAsTask != null
-                    ? curRequest.setSaveAsTask
-                    : (curRequest.recordId == null
-                          ? false
-                          : (curRequest.setSaveAsActivity == null
-                                ? false
-                                : curRequest.setSaveAsActivity));
-                curRequest.setSaveAsActivity = curRequest.setSaveAsActivity ==
-                    null
-                    ? false
-                    : curRequest.setSaveAsActivity;
-                // Strings to hold the email addresses to which you are sending the email.
-                //String[] toAddresses = new String[] {oneAddress};
-                Map<String, Object> m = sendBetterEmailUtil.generateMap(curRequest);
-                curRequest.toAddresses = sendBetterEmailUtil.buildAddressList(
-                    'TO',
-                    m
-                );
-                curRequest.ccAddresses = sendBetterEmailUtil.buildAddressList(
-                    'CC',
-                    m
-                );
-                curRequest.bccAddresses = sendBetterEmailUtil.buildAddressList(
-                    'BCC',
-                    m
-                );
-                // Create a new single email message object
-                // that will send out a single email to the addresses in the To, CC & BCC list.
-                Messaging.SingleEmailMessage mail = new Messaging.SingleEmailMessage();
-
-                // Assign the addresses for the To and CC lists to the mail object.
-                mail.setToAddresses(curRequest.toAddresses);
-                mail.setCcAddresses(curRequest.ccAddresses);
-                mail.setBccAddresses(curRequest.bccAddresses);
-
-                //outgoing email can either use an orgWideEmailAddress or specify it here, but not both
-                if (
-                    orgWideEmailAddressId != null &&
-                    orgWideEmailAddressId.length() > 0 
-                ) {
-                    mail.setOrgWideEmailAddressId(orgWideEmailAddressId);
-                } else {
-                    // Specify the name used as the display name.
-                    mail.setSenderDisplayName(senderDisplayName);
-                }
-		
-		// Specify the address used when the recipients reply to the email.
-                mail.setReplyTo(replyEmailAddress);
-
-                // Specify the subject line for your email address.
-                mail.setSubject(subject);
-
-                // Set to True if you want to BCC yourself on the email.
-                mail.setBccSender(bcc);
-
-                // Optionally append the salesforce.com email signature to the email.
-                // The email address of the user executing the Apex Code will be used.
-                // True by default unless the user passes a value in.
-				mail.setUseSignature(
-					curRequest.UseSalesforceSignature == null
-						? false
-						: curRequest.UseSalesforceSignature
-				);
-
-                if (curRequest.InReplyTo != null && curRequest.InReplyTo.size() > 0){
-                    mail.setInReplyTo(String.Join(curRequest.InReplyTo,','));
-                }
-
-				mail = SendBetterEmailAddAttachmentToEmail.addAttachments(
-                    mail,
-                    curRequest.contentDocumentAttachments,
-                    mapContentDocumentIdByContentVersion
-                );
-
-                if (
-                    thisResponse.errors == null &&
-                    (
-                        (templateName != null && templateName.length() > 0) &&
-                        (templateID != null && templateID.length() > 0)
-                    )
-                ) {
-                    thisResponse.errors = 'You\'re trying to pass in both the name of the template and a template ID. Gotta pick one or the other. Use templateName to select the first matching template qualified with \'Language="xxx_YY"\' in the Description.  The templateID represents a specific Salesforce Email Template (either Classic or Lightning).';
-                }
-
-                if (thisResponse.errors == null && (templateName != null && templateName.length() > 0) ) {
-                    templateID = sendBetterEmailUtil.getTemplateIDFromName(
-                        templateName,
-                        templateLanguage,
-                        mapTemplateNameByEmailTemplates,
-                        localeKey
-                    );
-                    if (templateID == null) {
-                        thisResponse.errors =
-                            'Could not find email template named "' +
-                            templateName +
-                            '".  Please have your administrator check the name and/or accessibility of this template';
-                    }
-                    thisResponse.templateUsed = templateID;
-                }
-
-                if (
-                    thisResponse.errors == null &&
-                    ((templateID != null && templateID.length() > 0) &&
-                    ((HTMLbody != null) || (plainTextBody != null)))
-                ) {
-                    thisResponse.errors = 'You\'re trying to pass in both a plaintext/html body and a template ID. Gotta pick one or the other. Make sure you\'re not confusing the Text Template resources in Flow, (which you can pass into either the HTMLBody or the plainTextBody) with the templateID, which represents a Salesforce Email Template (either Classic or Lightning).';
-                }
-
-                if (
-                    thisResponse.errors == null &&
-                    (templateID == null &&
-                    HTMLbody == null &&
-                    plainTextBody == null)
-                ) {
-                    thisResponse.errors = 'Body text must be provided to Send Better Email Action, either via HTMLbody, plainTextBody, or a templateID';
-                }
-
-                if (
-                    thisResponse.errors == null &&
-                    (curRequest.setSaveAsTask == true &&
-                    recordId == null)
-                ) {
-                    thisResponse.errors = 'In order to log this email send as a task, you need to pass in a recordId';
-                }
-
-                Boolean completed = true;
-                String error;
-                if (templateTargetObjectId != null && templateTargetObjectId.length() > 0 ) {
-                    mail.setTargetObjectId(templateTargetObjectId);
-                }
-                if (recordId != null && recordId.length() > 0 ) {
-                    mail.setWhatId(ID.valueOf(recordId));
-                }
-
-                // Specify the text content of the email.
-                if (plainTextBody != null) {
-                    mail.setPlainTextBody(plainTextBody);
-                }
-
-                if (HTMLbody != null) {
-                    mail.setHtmlBody(HTMLbody);
-                }
-                mail.setSaveAsActivity(curRequest.setSaveAsActivity);
-
-                if (templateID != null && templateID.length()>0) {
-                    try {
-                        mail.setTemplateID(templateID);
-                        mail.setTreatTargetObjectAsRecipient(setTreatTargetObjectAsRecipient);
-                        thisResponse.templateUsed = templateID;
-                    } catch (Exception e) {
-                        thisResponse.isSuccess = false;
-                        thisResponse.errors = e.getMessage();
-                    }
-                }
-
-                if (thisResponse.errors == null) {
-                    singleEmailList.add(mail);
-                    singleEmailRequestToSend.add(curRequest);
-                } else {
-                    thisResponse.isSuccess = false;
-                }
-
-                responseList.add(thisResponse);
-            }
-
-            requestIndex = requestIndex + 1;
-        }
-
-        if (massEmailList != null && massEmailList.size() > 0) {
-            try {
-                massSendEmailResults = Messaging.sendEmail(
-                    massEmailList,
-                    false
-                );
-            } catch (Exception e) {
-                // if an error occurred in sendMail, put same error message on all responses
-                for (Integer i = 0; i < responseList.size(); i++) {
-                    if (
-                        requests[i].emailMessageType ==
-                        SendBetterEmailConstant.MASSEMAIL
-                    ) {
-                        responseList[i].isSuccess = false;
-                        responseList[i].errors = e.getmessage();
-                    }
-                }
-            }
-
-            for (integer i = 0; i < massSendEmailResults.size(); i++) {
-                SendBetterEmailRequest request = massEmailRequestListToSend[i];
-                SendBetterEmailResponse response = responseList[request.index];
-                Messaging.SendEmailResult emailResult = massSendEmailResults[i];
-                if (
-                    emailResult.isSuccess() == false &&
-                    !(test.isRunningTest() &&
-                    request.setSaveAsTask == true &&
-                    ((Id) request.whatIds[0]).getSObjectType() ==
-                    Schema.User.sObjectType)
-                ) {
-                    response.isSuccess = false;
-                    response.errors = sendBetterEmailUtil.getErrorString(
-                        emailResult.getErrors()
-                    );
-                } else {
-                    response.isSuccess = true;
-                    if (request.setSaveAsTask == true) {
-                        if (
-                            request.whatIds != null &&
-                            request.whatIds.size() > 0
-                        ) {
-                            lstTaskWrapper.addAll(
-                                SendBetterEmailAddTasksToEmail.addTasks(
-                                    request,
-                                    null,
-                                    mapIdByEmailTemplate,
-                                    mapRecordIdByName
-                                )
-                            );
-                        } else {
-                            response.taskIds = new List<String>{
-                                'Error:  Mass Email requires whatIds if saveAsTask'
-                            };
-                        }
-                    }
-                }
-            }
-        }
-
-        if (singleEmailList != null && singleEmailList.size() > 0) {
-            try {
-                singleSendEmailResults = Messaging.sendEmail(
-                    singleEmailList,
-                    false
-                );
-            } catch (Exception e) {
-                // if an error occurred in sendMail, put same error message on all responses
-                for (Integer i = 0; i < responseList.size(); i++) {
-                    if (
-                        requests[i].emailMessageType !=
-                        SendBetterEmailConstant.MASSEMAIL
-                    ) {
-                        responseList[i].isSuccess = false;
-                        responseList[i].errors = e.getmessage();
-                    }
-                }
-            }
+  
+      
             for (integer i = 0; i < singleSendEmailResults.size(); i++) {
                 SendBetterEmailRequest request = singleEmailRequestToSend[i];
                 SendBetterEmailResponse response = responseList[request.index];
-                Messaging.SendEmailResult emailResult = singleSendEmailResults[
-                    i
-                ];
+                Messaging.SendEmailResult emailResult = singleSendEmailResults[i];
 
+
+                //Handle differently,  dont assume error due to saveAstask w/ User
                 if (
                     emailResult.isSuccess() != true &&
                     !(test.isRunningTest() &&
@@ -564,72 +394,188 @@ public without sharing class SendBetterEmail {
                 } else {
                     response.isSuccess = true;
                     if (request.setSaveAsTask == true) {
-                        string[] allRecipients = request.toAddresses;
-                        allRecipients.addall(request.ccAddresses);
-                        allRecipients.addall(request.bccAddresses);
                         if (request.recordId != null && request.recordId.length()> 0) {
-                            lstTaskWrapper.addAll(
-                                SendBetterEmailAddTasksToEmail.addTasks(
-                                    request,
-                                    allRecipients,
-                                    mapIdByEmailTemplate,
-                                    mapRecordIdByName
-                                )
-                            );
+                            lstTaskWrapper.addAll(SendBetterEmailAddTasksToEmail.addTasks(request,mapRecordIdByName));
                         }
                     }
                 }
             }
         }
 
-        for (
-            SendBetterEmailAddTasksToEmail.TaskWrapper taskWrap : lstTaskWrapper
-        ) {
+        //Insert Tasks /  save results to response
+
+        for (SendBetterEmailAddTasksToEmail.TaskWrapper taskWrap : lstTaskWrapper) {
             lstTaskToInsert.add(taskWrap.taskRec);
         }
-        List<Database.SaveResult> taskInsertResults = Database.insert(
-            lstTaskToInsert,
-            false
-        );
+        List<Database.SaveResult> taskInsertResults = Database.insert(lstTaskToInsert,false);
 
         for (integer i = 0; i < taskInsertResults.size(); i++) {
             Database.SaveResult taskResult = taskInsertResults[i];
-            SendBetterEmailAddTasksToEmail.TaskWrapper taskWrapper = lstTaskWrapper[
-                i
-            ];
-            SendBetterEmailResponse reponse = responseList[
-                taskWrapper.requestIndex
-            ];
+            SendBetterEmailAddTasksToEmail.TaskWrapper taskWrapper = lstTaskWrapper[i];
+            SendBetterEmailResponse reponse = responseList[taskWrapper.requestIndex];
             String taskId = taskResult.getId();
             Task taskRecord = lstTaskToInsert[i];
             if (taskResult.isSuccess()) {
                 reponse.taskIds.add(taskId);
             } else {
-                reponse.taskErrors.add(
-                    'Task Insert failed for RecordId ' +
-                    taskRecord.whatId +
-                    ' with error ' +
-                    sendBetterEmailUtil.getDatabaseErrorString(taskResult.getErrors())
-                );
+                string msg = 'Task Insert failed for RecordId ' + taskRecord.whatId + ' with error ' + sendBetterEmailUtil.getDatabaseErrorString(taskResult.getErrors())
+                reponse.taskErrors.add(msg);
             }
         }
 
+*/
         //report back the results
+        LIST<SendBetterEmailResponse> responses = new LIST<SendBetterEmailResponse>();
         boolean atLeastOneSent = false;
-        for (SendBetterEmailResponse thisResponse : responseList) {
-            if (thisResponse.isSuccess) {
+        for (SendBetterEmailRequest sbe : requests) {
+            responses.add(sbe.response);
+            if (sbe.Response?.isSuccess==true) {
                 atLeastOneSent = true;
-                break;
             }
         }
         if (!atLeastOneSent) {
             throw new InvocableActionException(
-                'No Messages were sent.  First Error: ' + responseList[0].errors
+                'No Messages were sent.  First Error: ' + responses[0].errors
             );
         }
-        return responseList;
+        
+        return responses;
     }
 
-    public class InvocableActionException extends Exception {
+    public class InvocableActionException extends Exception {}
+
+
+    //system.debug(SendBetterEmail.getLanguageFromTemplateDescription('Test Email Template - Language Specified '));
+
+	public static string getLanguageFromTemplateDescription(string descr) {
+        string lang = descr?.substringAfter(SendBetterEmailConstant.LANGUAGE_EQUAL).substringBefore(SendBetterEmailConstant.DOUBLE_QUOTE);
+        return String.isBlank(lang) ? 'undefined' : lang;
+	}
+
+    /*  FUTURE MAYBE
+    // MAP<templateName,<templateLang,EmailTemplate>
+    public static MAP<string,MAP<string,EmailTemplate>> getMapTemplatebyDevNameAndLang(SET<strings> templateNames) {
+        MAP<string,MAP<string,EmailTemplate>> rtn = new MAP<string,MAP<string,EmailTemplate>>();
+        for (EmailTemplate et : [   SELECT Id, Description, Name 
+                                    FROM EmailTemplate
+                                    WHERE Name IN :templateNames AND isActive = TRUE]) {
+            if (!rtn.contains(et.Name)) {
+                rtn.put(et.Name, new MAP<string,EmailTemplate>());
+            }
+            string lang = getLanguageFromTemplateDescription(et.Description);
+            if (lang==null) lang='NONE';
+            rtn.get(Name).put(lang,et);
+        }
+        return rtn;
     }
+    */
+
+    /**
+	* @description: wrapper for handling Messaging.sendEmail() in Unit Tests with emailDeliverablity disabled
+	* @author Tom Snyder <tom@3ddd.com> | 2021-10-02 
+	* @param sbers SingleEmailMessage[] or MassEmailMessage[]
+	* @param allOrNothing - The optional opt_allOrNone parameter specifies whether sendEmail prevents delivery of all other messages when any of the messages fail due to an error (true), 
+				or whether it allows delivery of the messages that don't have errors (false). The default is true.
+	* @return emailSendEmailResult[] -  if SendBetterEmail.haltSendEmail == false else NULL
+	**/
+
+
+    //map keyset is lowercase
+    public static MAP<string,MAP<string,EmailTemplate>> getMapTemplatebyNameAndLang(SET<string> templateNames) {
+        MAP<string,MAP<string,EmailTemplate>> rtn = new MAP<string,MAP<string,EmailTemplate>>();
+        if (templateNames!=null && !templateNames.isEmpty()) {
+            for (EmailTemplate et : [   SELECT Id, Description, Name, RelatedEntityType, TemplateType
+                                        FROM EmailTemplate
+                                        WHERE Name IN :templateNames AND isActive = TRUE]) {
+                if (!rtn.containsKey(et.Name.toLowerCase())) {
+                    rtn.put(et.Name.toLowerCase(), new MAP<string,EmailTemplate>());
+                }
+                string lang = getLanguageFromTemplateDescription(et.Description);
+                rtn.get(et.Name.toLowerCase()).put(lang.toLowerCase(),et);
+            }
+        }
+        return rtn;
+    }
+
+    public static MAP<string,EmailTemplate> getEmailTemplates(SET<string> ids) {
+        return new MAP<string,EmailTemplate>(   [SELECT Id, Description, Name, Subject, RelatedEntityType, TemplateType
+                                                FROM EmailTemplate
+                                                WHERE Id IN :ids AND isActive = TRUE]   );
+    }
+
+
+    public static boolean validateSbe(SendBetterEmailRequest sbe) {
+
+        //Validate
+ 
+        if (String.isNotBlank(sbe.templateName) && String.isNotBlank(sbe.templateID)) {
+            sbe.response.errors = 'You\'re trying to pass in both the name of the template and a template ID. Gotta pick one or the other. Use templateName to select the first matching template qualified with \'Language="xxx_YY"\' in the Description.  The templateID represents a specific Salesforce Email Template (either Classic or Lightning).';
+            return false;
+        }
+        if ( sbe.EmailTemplate==null && (String.isNotBlank(sbe.templateName) || String.isNotBlank(sbe.templateID)) ) {
+            if (String.isNotBlank(sbe.templateName)) {
+                sbe.response.errors =  'Could not find email template named "' +sbe.templateName +'".  Please have your administrator check the name and/or accessibility of this template';
+            }
+            else {
+                sbe.response.errors =  'Could not find email template ID "' +sbe.templateID +'".  Please have your administrator check the id and/or accessibility of this template';
+            }
+            return false;
+        }
+
+        if ( (String.isNotBlank(sbe.templateName) || String.isNotBlank(sbe.templateID)) && ((sbe.HTMLbody != null) || (sbe.plainTextBody != null)) ) {
+            sbe.response.errors = 'You\'re trying to pass in both a plaintext/html body and a template ID. Gotta pick one or the other. Make sure you\'re not confusing the Text Template resources in Flow, (which you can pass into either the HTMLBody or the plainTextBody) with the templateID, which represents a Salesforce Email Template (either Classic or Lightning).';
+            return false;
+        }
+
+        if (sbe.EmailTemplate==null && sbe.HTMLbody == null && sbe.plainTextBody == null) {
+            sbe.response.errors = 'Body text must be provided to Send Better Email Action, either via HTMLbody, plainTextBody, or a templateID';
+            return false;
+        }
+
+        if ( sbe.emailMessageType == SendBetterEmailConstant.MASSEMAIL) {
+            if (String.isBlank(sbe.description)) {
+                sbe.response.errors  = 'You must specify a description for mass email message collections.';
+                return false;
+            }
+            if (sbe.targetObjectIds==null || sbe.targetObjectIds.IsEmpty()) {
+                sbe.response.errors = 'You must specify a collection of targetObjectIds - required parameter for mass emails.';
+                return false;
+            }
+            if ( sbe.EmailTemplate?.TemplateType?.tolowercase()=='visualforce') {
+                sbe.response.errors ='Visualforce email templates cannot be used for mass email.';
+                return false;
+            }
+            //JACK:  I dont think this is entirly correct base on sf docs  (MASS-EMAIL)
+            if ( (sbe.whatIds!=null && sbe.targetObjectIds!=null) && sbe.whatIds?.size() != sbe.targetObjectIds?.size() ) { 
+                sbe.response.errors = 'You must match targetObjectIds one-for-one with whatIds.';
+                return false;
+            }
+            /* - this still sends email and stuffs error in TaskId response
+            if ( sbe.setSaveAsTask == true && sbe.whatIds==null) {
+                sbe.response.errors ='Error:  Mass Email requires whatIds if saveAsTask'
+            };
+            */
+        }
+
+        
+        /*  JACK:  looks like there may have been some code to do this manually  allow?
+        if ( sbe.setSaveAsTask == true && sbe.recordId == null ) {
+            sbe.response.errors = 'In order to log this email send as a task, you need to pass in a recordId';
+            return false;
+        }
+        */
+
+        if ( sbe.recordId?.startsWith('005')==true && sbe.templateTargetObjectId?.startsWith('005')==true ) {
+            sbe.response.errors = 'WhatId is not available for sending emails to Users when User is also the template targetObject';
+            return false;
+        }
+
+
+
+
+        return true;
+    }
+
+
+
 }

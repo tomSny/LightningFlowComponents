@@ -2,12 +2,12 @@
  * @description       : 
  * @author            : Refactored from Alex Edelstein
  * @group             : 
- * @last modified on  : 09-01-2021
- * @last modified by  : Michael Kraus
+ * @last modified on  : 2021-10-02
+ * @last modified by  : Tom Snyder <tom@3ddd.com>
  * Modifications Log 
  * Ver      Date        Author              Modification
  * 1.0      02-16-2021  Alex Edelstein      Initial Version
- * 2.0.5    02-16-2021  Jack D. Pond        Use Title instead of PathOnClient for attachment name
+ * 2.0.5    02-16-2021  Jack D. Pond        JACK:  no longer logic for this?  Use Title instead of PathOnClient for attachment name
  * 2.1.7    09-01-2021  Michael Kraus       Use setEntityAttachments() instead of setFileAttachments()
  * 
 **/
@@ -23,12 +23,8 @@ public inherited sharing class SendBetterEmailAddAttachmentToEmail {
         if (contentDocumentLinks != null && !contentDocumentLinks.isEmpty()) {
             for (ContentDocumentLink cdl : contentDocumentLinks) {
                 Id contentDocumentId = cdl.ContentDocumentId;
-                if (
-                    mapContentDocumentIdByContentVersion.get(
-                        contentDocumentId
-                    ) != null &&
-                    mapContentDocumentIdByContentVersion.get(contentDocumentId)
-                        .size() > 0
+                if ( mapContentDocumentIdByContentVersion.get(contentDocumentId) != null &&
+                    mapContentDocumentIdByContentVersion.get(contentDocumentId).size() > 0
                 ) {
                     for (
                         ContentVersion cv : mapContentDocumentIdByContentVersion.get(

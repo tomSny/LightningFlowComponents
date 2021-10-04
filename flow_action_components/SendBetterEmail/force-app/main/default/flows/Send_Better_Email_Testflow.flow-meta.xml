@@ -10,6 +10,7 @@
         <connector>
             <targetReference>Bulk_Add_To_List_of_Requests</targetReference>
         </connector>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
         <inputParameters>
             <name>HTMLbody</name>
             <value>
@@ -55,6 +56,7 @@
         <connector>
             <targetReference>ScreenConsole1</targetReference>
         </connector>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
         <inputParameters>
             <name>HTMLbody</name>
             <value>
@@ -110,6 +112,7 @@
         <connector>
             <targetReference>ScreenConsole1</targetReference>
         </connector>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
         <inputParameters>
             <name>HTMLbody</name>
             <value>
@@ -171,6 +174,7 @@
         <connector>
             <targetReference>ScreenConsole1</targetReference>
         </connector>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
         <inputParameters>
             <name>contentDocumentAttachments</name>
             <value>
@@ -239,6 +243,7 @@
         <connector>
             <targetReference>ScreenConsole1</targetReference>
         </connector>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
         <inputParameters>
             <name>recordId</name>
             <value>
@@ -307,6 +312,7 @@
         <connector>
             <targetReference>ScreenConsole1</targetReference>
         </connector>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
         <inputParameters>
             <name>recordId</name>
             <value>
@@ -369,6 +375,7 @@
         <connector>
             <targetReference>ScreenConsole1</targetReference>
         </connector>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
         <inputParameters>
             <name>description</name>
             <value>
@@ -405,6 +412,7 @@
         <connector>
             <targetReference>ScreenConsole1</targetReference>
         </connector>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
         <inputParameters>
             <name>emailRequests</name>
             <value>
@@ -424,6 +432,7 @@
         <connector>
             <targetReference>ScreenConsole1</targetReference>
         </connector>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
         <inputParameters>
             <name>cb_setTreatTargetObjectAsRecipient</name>
             <value>

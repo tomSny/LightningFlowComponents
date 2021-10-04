@@ -4,8 +4,8 @@
  * @NotTested			: OrgWideEmailAddress - cannot be assured deployment org actually has any and test insert not allowed
  * @Author				: Jack D. Pond
  * @Group				: unofficialSF
- * @Last Modified By	: Jack D. Pond
- * @Last Modified On	: 2021-08-13
+ * @Last Modified By	: Tom Snyder <tom@3ddd.com>
+ * @Last Modified On	: 2021-10-03
  * @Modification Log	:
  * @License				: LICENSE found in https://github.com/alexed1/LightningFlowComponents
  * Ver		Date		Author					Modification
@@ -61,7 +61,7 @@ public with sharing class SendBetterEmailTest {
                 Inversely, not doing these tests can cause code coverage % failures.  For pre-deployment testing purposes, TEST_WITH_CREATED_RECORDS should be set to true,
                 but for version release, should be set to false.
 **/
-  private static final Boolean TEST_WITH_CREATED_RECORDS = false;
+  private static final Boolean TEST_WITH_CREATED_RECORDS = true;
   //
   private static final String TEMPLATE_NAME = 'xxxyyy Test Email Template yyyxxx';
   private static final String TEMPLATE_DEVNAME = 'xxxyyy_Test_Email_Template_yyyxxx';
@@ -229,6 +229,8 @@ public with sharing class SendBetterEmailTest {
     return caseList;
   }
 
+
+  //JACK:  dont this this test is actually working as expected.
   // @Test t001_canSendEmail: emailDeliverabilityEnabled and capacity not exceeded or not emailDeliverabilityEnabled
   @isTest
   public static void t001_canSendEmail() {
@@ -287,6 +289,7 @@ public with sharing class SendBetterEmailTest {
     List<SendBetterEmailRequest> reqList = new List<SendBetterEmailRequest>();
     reqList.add(testReq);
     Boolean exceptionHit = false;
+    SendBetterEmail.haltSendEmail = false;
     try {
       List<SendBetterEmailResponse> testSendBetterEmailResponseList = SendBetterEmail.SendEmail(
         reqList
@@ -390,6 +393,7 @@ public with sharing class SendBetterEmailTest {
     );
   }
   // @Test t006_coverageIfTemplateNameAndNoLanguage: Can select the Organization LanguageLocaleKey template if no language specified.  However, if LanguageLocaleKey isn't en_US, still works
+  // JACK: added support logic for a undefined email template that will rollback to if org locale doesnt match,  and if only one match by name.
   @isTest
   public static void t006_coverageIfTemplateNameAndNoLanguage() {
     SendBetterEmailRequest testReq = new SendBetterEmailRequest();
@@ -410,6 +414,8 @@ public with sharing class SendBetterEmailTest {
         't006_coverageIfTemplateNameAndNoLanguage error: ' + e.getMessage()
       );
     }
+    system.Assert(SendBetterEmail.getMapTemplatebyNameAndLang(new SET<string> {TEMPLATE_NAME}).values()[0].size()==2);
+    system.Assert(testSendBetterEmailResponseList[0].templateUsed!=null);
     //		Depending on the organization locallangage key, could be either
     if (
       [SELECT LanguageLocaleKey FROM Organization LIMIT 1].LanguageLocaleKey ==
@@ -1593,5 +1599,26 @@ public with sharing class SendBetterEmailTest {
         't031_canSendEmailwithInReplyTo (Should have sent 1 with reply)'
       );
     }
+  }
+
+
+  @isTest
+  static void t032_isSerializable() {
+    //Want to be sure SendBetterEmail class is Serializable/Deserializable for future async processing
+
+    ID EmailTemplateId = [SELECT Id FROM EmailTemplate LIMIT 1]?.Id;
+    List<SendBetterEmailRequest> reqList = new List<SendBetterEmailRequest>();
+    SendBetterEmailRequest testReq = new SendBetterEmailRequest();
+    //        testReq.templateID = EmailTemplateId;
+    testReq.templateName = TEMPLATE_NOSUCH;
+    testReq.emailMessageType = 'massEmail';
+    testReq.targetObjectIds = new List<String>{ UserInfo.getUserId() };
+    testReq.whatIds = testReq.targetObjectIds;
+    testReq.Description = 'MassEmail Test';
+    testReq.saveAsTask = true;
+    reqList.add(testReq);
+    String jsonString = JSON.serialize(reqList.add(testReq));
+    List<SendBetterEmail> sbes = (List<SendBetterEmail>) Json.deserialize(jsonString,List<SendBetterEmail>.class );
+    System.debug(jsonString);
   }
 }
