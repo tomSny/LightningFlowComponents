@@ -4,7 +4,7 @@
  * @OriginalAuthor		: Alex Edelstein, etal
  * @Group				: unofficialSF
  * @Last Modified By	: Tom Snyder <tom@3ddd.com>
- * @Last Modified On	: 2021-10-03
+ * @Last Modified On	: 2021-10-04
  * @License				: LICENSE found in https://github.com/alexed1/LightningFlowComponents
  * @Modification Log	:
  *
@@ -29,6 +29,31 @@
 						sahib-gadzhiev		    Quick Choice and Flow Combobox Bugs from JET BI Fix: #823
  * 2.01.07  2021-06-29  Jack Pond               Added to Email Category for flow builder New Action
  *
+ 
+* 2.2?.??  2021-10-04  Tom Snyder               large refactor
+, here are the main differences:
+
+    - state info is stored on SendBetterEmailRequest (i.e. response, results, emailtemplate, contentVersions, etc..)
+    - SendBetterEmailRequest also acts as a builder for MassEmail, SingleEmail, And Task(s);
+    - New set of core classes to keep logic modular / SoC.
+
+==========================================================================================
+ "Notation" = | ::class:: | method() | { block } | --DataFlowType--> | ""label" |
+============================================================================================
+    "FLOW_INTERVIEW" --SendBetterEmailRequest[]--> ::SendBetterEmailDispatcher:: {
+        Validate() {
+            Normalize()-->::EmailTemplateSelector::--setTemplate()--
+            -->::AttachmentSelector::--setAttachments()-->validate()
+        }
+        Dispatch() {
+            "MassEmails" --SendBetterEmailRequest[]-->::SendBetterEmailTransmitter::--Send();
+            "SingleEmail" --SendBetterEmailRequest[]-->::SendBetterEmailTransmitter::--Send();
+
+            "AddTasks" = SendBetterEmailTransmitter[]-->::PostEmailHandler::--Save();  //TODO
+        }
+============================================================================================
+ * 
+
  **/
 
 public without sharing class SendBetterEmail {
@@ -57,28 +82,7 @@ public without sharing class SendBetterEmail {
     }
 
 
-/*
 
-massive refactor, here are the main differences:
-
-    - state info is stored on SendBetterEmailRequest (i.e. response, results, emailtemplate, contentVersions, etc..)
-    - SendBetterEmailRequest also acts as a builder for MassEmail, SingleEmail, And Task(s);
-    - New set of core classes to keep logic modular / SoC.
-==========================================================================================
- "Notation" = | ::class:: | method() | { block } | --DataFlow[]--> | ""label" |
-============================================================================================
-    "FLOW_INTERVIEW" --SendBetterEmailRequest[]--> ::SendBetterEmailDispatcher:: {
-        Validate() {
-            Normalize()-->::EmailTemplateSelector::--setTemplate()--
-            -->::AttachmentSelector::--setAttachments()-->validate()
-        }
-        Dispatch() {
-            "MassEmails" --SendBetterEmailRequest[]-->::SendBetterEmailTransmitter::--Send();
-            "SingleEmail" --SendBetterEmailRequest[]-->::SendBetterEmailTransmitter::--Send();
-
-            "AddTasks" = SendBetterEmailTransmitter[]-->::PostEmailHandler::--Save();  //TODO
-        }
-============================================================================================*/
     public class SendBetterEmailDispatcher {
         List<SendBetterEmailRequest> emails;
         //MAP<string,MAP<string,EmailTemplate>> mapTemplatebyNameAndLang;
