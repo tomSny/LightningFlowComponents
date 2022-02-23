@@ -4,7 +4,7 @@
  * @OriginalAuthor		: Alex Edelstein, etal
  * @Group				: unofficialSF
  * @Last Modified By	: Tom Snyder <tom@3ddd.com>
- * @Last Modified On	: 2021-10-04
+ * @Last Modified On	: 2021-10-06
  * @License				: LICENSE found in https://github.com/alexed1/LightningFlowComponents
  * @Modification Log	:
  *
@@ -63,6 +63,10 @@ public without sharing class SendBetterEmail {
     @TestVisible
     static boolean haltSendEmail = ( Test.isRunningTest() && !SendBetterEmail.isEmailDeliverabilityEnabled  );
 
+
+
+
+    // System.debug(SendBetterEmail.isEmailDeliveryEnabled);
     public static boolean isEmailDeliverabilityEnabled {
         get {
             try {
@@ -114,16 +118,20 @@ public without sharing class SendBetterEmail {
         }
 
         public void dispatch() {
-            SendBetterEmailTransmitter massTransmit = getMassEmailContext().send();
-            SendBetterEmailTransmitter singleTransmit = getSingleEmailContext().send();
+            SendBetterEmailTransmitter massTransmit = getValidMassEmailRequests().send();
+            SendBetterEmailTransmitter singleTransmit = getValidSingleEmailRequests().send();
+            
+            SendBetterEmailAddTasksToEmail.SaveTasks(emails);
+
+            //sbe.setSaveAsTask
         }
 
         //Valid MASS SBEmails 
-        public SendBetterEmailTransmitter getMassEmailContext() {
+        public SendBetterEmailTransmitter getValidMassEmailRequests() {
             LIST<SendBetterEmailRequest> betterEmails = new LIST<SendBetterEmailRequest>();
             LIST<Messaging.MassEmailMessage> massEmails = new LIST<Messaging.MassEmailMessage>();
             for (SendBetterEmailRequest sber : emails) {
-                if (sber.response.errors==null && sber.emailMessageType == SendBetterEmailConstant.MASSEMAIL) {
+                if (sber.isValid && sber.emailMessageType == SendBetterEmailConstant.MASSEMAIL) {
                     Messaging.MassEmailMessage e = sber.toMassEmailMessage();
                     if (e!=null) {
                         massEmails.add(e);
@@ -133,13 +141,13 @@ public without sharing class SendBetterEmail {
             }
             return new SendBetterEmailTransmitter(betterEmails, massEmails, true);
         }
-
+        
         //Valid SINGLE SBEmails 
-        public SendBetterEmailTransmitter getSingleEmailContext() {
+        public SendBetterEmailTransmitter getValidSingleEmailRequests() {
             LIST<SendBetterEmailRequest> betterEmails = new LIST<SendBetterEmailRequest>();
             LIST<Messaging.SingleEmailMessage> singleEmails = new LIST<Messaging.SingleEmailMessage>();
             for (SendBetterEmailRequest sber : emails) {
-                if (sber.response.errors==null && sber?.emailMessageType != SendBetterEmailConstant.MASSEMAIL) {
+                if (sber.isValid==null && sber?.emailMessageType != SendBetterEmailConstant.MASSEMAIL) {
                     Messaging.SingleEmailMessage singleEmail = sber.toSingleEmailMessage();
                     if (singleEmail!=null) {
                         singleEmails.add(singleEmail);
@@ -149,6 +157,8 @@ public without sharing class SendBetterEmail {
             }
             return new SendBetterEmailTransmitter(betterEmails, singleEmails, false);
         }
+
+ 
 
     }
 
@@ -304,12 +314,14 @@ public without sharing class SendBetterEmail {
 
 
     public static void normalizeSbe(SendBetterEmailRequest sbe) {
-
-        sbe.subject = (String.IsEmpty(sbe.subject?.trim())) ? null : sbe.subject;
+        sbe.setSaveAsTask = sbe.saveAsTask;
+        sbe.setSaveAsActivity = sbe.saveAsActivity;
         sbe.emailMessageType = sbe.emailMessageType == null ? 'singleEmail' : sbe.emailMessageType;
+        //if saveAsTask is null, it will default to whatever saveAsActivity is, but if recordId is null, will set it to false
         sbe.setSaveAsTask = sbe.setSaveAsTask != null ? sbe.setSaveAsTask : 
             (sbe.recordId == null ? false : (sbe.setSaveAsActivity == null ? false : sbe.setSaveAsActivity));
         sbe.setSaveAsActivity = sbe.setSaveAsActivity == null ? false : sbe.setSaveAsActivity;
+        sbe.subject = (String.IsEmpty(sbe.subject?.trim())) ? null : sbe.subject;
         sbe.setTreatTargetObjectAsRecipient = sbe.setTreatTargetObjectAsRecipient==null ? SendBetterEmailConstant.DEFAULT_TREAT_TARGET_OBJECT_AS_RECIPIENT : sbe.setTreatTargetObjectAsRecipient;
         sbe.UseSalesforceSignature = sbe.UseSalesforceSignature==null ? false : sbe.UseSalesforceSignature;
         sbe.bcc = sbe.bcc==null ? false : sbe.bcc;
@@ -341,20 +353,7 @@ public without sharing class SendBetterEmail {
 
         respecting - Email Opt Out ?  do you have a settings/CMDT?
         */
-        LIST<string> allTargetObjectIds = new LIST<string>();
-        for (SendBetterEmailRequest sber : requests) {
-            if (sber.emailMessageType == SendBetterEmailConstant.MASSEMAIL) {
-                if (sber.targetObjectIds!=null) {
-                    allTargetObjectIds.addAll(sber.targetObjectIds);
-                }
-            } else {
-                if (sber.templateTargetObjectId != null) {
-                    allTargetObjectIds.add(sber.templateTargetObjectId);
-                }
-            }
-        }
-        // Cache a Map of targetObjectIds(Contact, Lead, User or other Custom Objects)
-        Map<string,string> mapRecordIdByName = sendBetterEmailUtil.getMapRecordIdByName(allTargetObjectIds);
+      
            
         
 /*
@@ -363,7 +362,7 @@ public without sharing class SendBetterEmail {
  
    
         List<SendBetterEmailAddTasksToEmail.TaskWrapper> lstTaskWrapper = new List<SendBetterEmailAddTasksToEmail.TaskWrapper>();
-        List<Task> lstTaskToInsert = new List<Task>();
+        
 
         response.isSuccess = true;
         if (request.setSaveAsTask == true) {
@@ -382,7 +381,7 @@ public without sharing class SendBetterEmail {
                 SendBetterEmailResponse response = responseList[request.index];
                 Messaging.SendEmailResult emailResult = singleSendEmailResults[i];
 
-
+                JACK: Dont understand the purpose of this logic
                 //Handle differently,  dont assume error due to saveAstask w/ User
                 if (
                     emailResult.isSuccess() != true &&

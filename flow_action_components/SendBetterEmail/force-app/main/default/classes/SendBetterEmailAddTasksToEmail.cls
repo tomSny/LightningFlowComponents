@@ -2,7 +2,7 @@
  * @description       : SendBetterEmailAddTasksToEmail - helper
  * @author            : Mohith Shrivastava
  * @group             : 
- * @last modified on  : 2021-10-03
+ * @last modified on  : 2021-10-05
  * @last modified by  : Tom Snyder <tom@3ddd.com>
  * Modifications Log 
  * Ver		Date		Author				Modification
@@ -44,8 +44,58 @@ public inherited sharing class SendBetterEmailAddTasksToEmail {
 	* @param mapRecordIdByName 
 	* @return List<TaskWrapper> 
 	**/
-	public static List<TaskWrapper> addTasks(SendBetterEmailRequest request,Map<String, String> mapRecordIdByName) {
+
+
+
+	public static void SaveTasks(SendBetterEmailRequest[] requests) {
+		List<TaskWrapper> lstTaskWrapper = new List<TaskWrapper>();
+		LIST<SendBetterEmailRequest> recordsToTask = new LIST<SendBetterEmailRequest>();
+		LIST<string> allTargetObjectIds = new LIST<string>();
+        for (SendBetterEmailRequest sber : requests) {
+			if (sber.isValid && sber.response.isSuccess==true && sber.setSaveAsTask) {
+				if (sber.emailMessageType == SendBetterEmailConstant.MASSEMAIL) {
+					if (sber.targetObjectIds!=null && sber.whatIds!=null) {
+						allTargetObjectIds.addAll(sber.targetObjectIds);
+					}
+				} else {
+					if (String.isNotBlank(sber.recordId) && String.isNotBlank(sber.templateTargetObjectId)) {
+						allTargetObjectIds.add(sber.templateTargetObjectId);
+					}
+				}
+				recordsToTask.add(sber);
+			}
+        }
+		integer inx = 0; //temp workaround...find a better way
+		for (SendBetterEmailRequest sbe : recordsToTask) {
+			sbe.index=inx++;
+			lstTaskWrapper.addAll(addTasks(sbe, sendBetterEmailUtil.getMapRecordIdByName(allTargetObjectIds) ));
+		}
+
+
+		List<Task> lstTaskToInsert = new List<Task>();
+        for (TaskWrapper taskWrap : lstTaskWrapper) {
+            lstTaskToInsert.add(taskWrap.taskRec);
+        }
+        List<Database.SaveResult> taskInsertResults = Database.insert(lstTaskToInsert,false);
+
+        for (integer i = 0; i < taskInsertResults.size(); i++) {
+            Database.SaveResult taskResult = taskInsertResults[i];
+            TaskWrapper taskWrapper = lstTaskWrapper[i];
+            SendBetterEmailResponse response = recordsToTask[taskWrapper.requestIndex].response;
+            String taskId = taskResult.getId();
+            Task taskRecord = lstTaskToInsert[i];
+            if (taskResult.isSuccess()) {
+                response.taskIds.add(taskId);
+            } else {
+                string msg = 'Task Insert failed for RecordId ' + taskRecord.whatId + ' with error ' + sendBetterEmailUtil.getDatabaseErrorString(taskResult.getErrors());
+                response.taskErrors.add(msg);
+            }
+        }
+	}
+
+	public static List<TaskWrapper> addTasks(SendBetterEmailRequest request, Map<String, String> mapRecordIdByName) {
 		List<String> recipientList;
+		LIST<string> allTargetObjectIds = new LIST<string>();
 		if ( request.emailMessageType != SendBetterEmailConstant.MASSEMAIL) {
 			recipientList.addall(request.toAddresses);
 			recipientList.addall(request.ccAddresses);
@@ -55,12 +105,14 @@ public inherited sharing class SendBetterEmailAddTasksToEmail {
 		if (request.emailTemplate!=null) {
 			mapIdByEmailTemplate.put(request.TemplateID, request.emailTemplate);
 		}
+
+
 		return addTasks(request, recipientList, mapIdByEmailTemplate, mapRecordIdByName);
 	}
 
 	
 	// Add task activities
-	// NEED YO UNDERSTAND REQUIRMENTS??
+	// I NEED YO UNDERSTAND REQUIRMENTS??
 	//ONLY SUCCESSFUL EMAILS?  
 	//		//JACK: how to handle: legacy logic! what if subject has a mergefield?  also subject was never queried so was no working as logic intended
 	public static List<TaskWrapper> addTasks(
@@ -81,22 +133,13 @@ public inherited sharing class SendBetterEmailAddTasksToEmail {
 		}
 
 		List<TaskWrapper> lstTaskWrapper = new List<TaskWrapper>();
-
-		List<String> theseTargets = new List<String>{
-			request.templateTargetObjectId
-		};
+		List<String> theseTargets = new List<String>{request.templateTargetObjectId };
 		List<String> lstWhatIds = new List<String>{ request.recordId };
 
 		if (request.emailMessageType == SendBetterEmailConstant.MASSEMAIL) {
 			theseTargets = request.targetObjectIds;
 			lstWhatIds = request.whatIds;
 		} else {
-			theseTargets = request.templateTargetObjectId == null
-				? new List<String>()
-				: new List<String>{ request.templateTargetObjectId };
-			lstWhatIds = request.recordId == null
-				? new List<String>()
-				: new List<String>{ request.recordId };
 			Integer j = 0;
 			while (j < recipientList.size()) {
 				if (String.isBlank(recipientList[j])) {

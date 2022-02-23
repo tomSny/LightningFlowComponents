@@ -3,7 +3,7 @@
  * @author            : Alex Edelstein - etal
  * @license           
  * @group             : 
- * @last modified on  : 2021-10-03
+ * @last modified on  : 2021-10-05
  * @last modified by  : Tom Snyder <tom@3ddd.com>
  * @License				: LICENSE found in https://github.com/alexed1/LightningFlowComponents
  * Modifications Log 
@@ -26,6 +26,8 @@ public inherited sharing class SendBetterEmailRequest {
 		response = new SendBetterEmailResponse();
 		contentVersions = new SET<ContentVersion>();
 	}
+
+	public boolean isValid { get { return response.errors!=null; } }
 
 	@invocableVariable(label='bcc' description='Indicates whether the email sender receives a copy of the email that is sent. For a mass mail, the sender is only copied on the first email sent.')
 	@AuraEnabled
